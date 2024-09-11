@@ -13,7 +13,7 @@ ml miniconda3
 conda activate ASA_classification
 
 CUDA_VISIBLE_DEVICES=0 python summarization_LlaMA.py            \
---huggingface_token     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   \
+--huggingface_token     yourtoken                               \
 --model_name_or_path    meta-llama/Meta-Llama-3-8B              \
 --test_file             ./test_data-10.json                     \
 --output_dir            ./summarization_LlaMA3.json
