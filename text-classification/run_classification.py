@@ -45,9 +45,12 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 
+from huggingface_hub import login
+from peft import LoraConfig, get_peft_model
+from ploting import plot_loss
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.45.0.dev0")
+# check_min_version("4.45.0.dev0")
 
 require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
@@ -256,6 +259,26 @@ class ModelArguments:
     )
 
 
+@dataclass
+class LoraArguments:
+    r: int = field(
+        default=8,
+        metadata={"help": "Rank of the LoRA matrix, controlling the extent of dimensionality reduction. A smaller value reduces the parameter update space."}
+    )
+    lora_alpha: int = field(
+        default=16,
+        metadata={"help": "The alpha parameter for LoRA, typically used to scale the output of the low-rank matrices."}
+    )
+    lora_dropout: float = field(
+        default=0.1,
+        metadata={"help": "The dropout probability to apply to the LoRA layers, helping to reduce overfitting."}
+    )
+    bias: str = field(
+        default="none",
+        metadata={"help": "Whether or not to apply bias in the LoRA layers. Options are 'none', 'all', or 'lora_only'."}
+    )
+
+
 def get_label_list(raw_dataset, split="train") -> List[str]:
     """Get the list of labels from a multi-label dataset"""
 
@@ -270,21 +293,24 @@ def get_label_list(raw_dataset, split="train") -> List[str]:
 
 
 def main():
+    # 用您在 Hugging Face 上生成的访问令牌进行登录
+    login("yourtoken")
+
     # See all possible arguments in src/transformers/training_args.py
     # or by passing the --help flag to this script.
     # We now keep distinct sets of args, for a cleaner separation of concerns.
 
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments))
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, LoraArguments))
     if len(sys.argv) == 2 and sys.argv[1].endswith(".json"):
         # If we pass only one argument to the script and it's the path to a json file,
         # let's parse it to get our arguments.
-        model_args, data_args, training_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
+        model_args, data_args, training_args, lora_args = parser.parse_json_file(json_file=os.path.abspath(sys.argv[1]))
     else:
-        model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+        model_args, data_args, training_args, lora_args = parser.parse_args_into_dataclasses()
 
     # Sending telemetry. Tracking the example usage helps us better allocate resources to maintain them. The
     # information sent is the one passed as arguments along with your Python/PyTorch versions.
-    send_example_telemetry("run_classification", model_args, data_args)
+    send_example_telemetry("run_classification", model_args, data_args, lora_args)
 
     # Setup logging
     logging.basicConfig(
@@ -505,6 +531,8 @@ def main():
         token=model_args.token,
         trust_remote_code=model_args.trust_remote_code,
     )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path,
         from_tf=bool(".ckpt" in model_args.model_name_or_path),
@@ -515,6 +543,16 @@ def main():
         trust_remote_code=model_args.trust_remote_code,
         ignore_mismatched_sizes=model_args.ignore_mismatched_sizes,
     )
+
+    # 配置 LoRA
+    lora_config = LoraConfig(
+        r=lora_args.r,
+        lora_alpha=lora_args.lora_alpha,
+        lora_dropout=lora_args.lora_dropout,
+        target_modules=["q_proj", "v_proj"],
+        bias=lora_args.bias
+    )
+    model = get_peft_model(model, lora_config)
 
     # Padding strategy
     if data_args.pad_to_max_length:
@@ -695,6 +733,7 @@ def main():
         trainer.log_metrics("train", metrics)
         trainer.save_metrics("train", metrics)
         trainer.save_state()
+        plot_loss(training_args.output_dir, keys=["loss", "eval_loss"])
 
     # Evaluation
     if training_args.do_eval:
